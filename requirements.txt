@@ -2,4 +2,4 @@ gradio
 requests
 Pillow
 numpy
-opencv-python-headless.
+opencv-python-headless
