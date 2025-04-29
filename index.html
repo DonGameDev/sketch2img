@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Drawing Board</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* Tailwind gray-100 */
+            display: flex;
+            justify-content: center;
+            align-items: flex-start; /* Align items to the top */
+            min-height: 100vh;
+            padding: 20px; /* Add some padding */
+        }
+        .container {
+            display: flex;
+            flex-direction: column; /* Stack elements vertically on small screens */
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px; /* Max width for larger screens */
+            background-color: #ffffff; /* White background */
+            border-radius: 1rem; /* Tailwind rounded-xl */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Tailwind shadow-xl */
+            padding: 20px;
+        }
+        @media (min-width: 768px) { /* Medium screens and up */
+            .container {
+                flex-direction: row; /* Arrange elements horizontally */
+            }
+        }
+        .drawing-area {
+            flex: 2; /* Drawing area takes more space */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .controls {
+            flex: 1; /* Controls area takes less space */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+         .output-area {
+            flex: 2; /* Output area takes same space as drawing area */
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            justify-content: center; /* Center image vertically */
+            align-items: center; /* Center image horizontally */
+        }
+        canvas {
+            border: 1px solid #d1d5db; /* Tailwind gray-300 */
+            background-color: #ffffff; /* White background */
+            touch-action: none; /* Prevent default touch actions like scrolling */
+            border-radius: 0.5rem; /* Tailwind rounded-md */
+            width: 100%; /* Make canvas fluid */
+            height: auto; /* Maintain aspect ratio */
+        }
+        .tool-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .tool-group label {
+            font-weight: 600; /* Tailwind font-semibold */
+            color: #374151; /* Tailwind gray-700 */
+        }
+        .tool-group input[type="color"],
+        .tool-group input[type="range"],
+        .tool-group button {
+            padding: 8px;
+            border-radius: 0.5rem; /* Tailwind rounded-md */
+            border: 1px solid #d1d5db; /* Tailwind gray-300 */
+        }
+        .tool-group button {
+            background-color: #3b82f6; /* Tailwind blue-500 */
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .tool-group button:hover {
+            background-color: #2563eb; /* Tailwind blue-600 */
+        }
+        #outputImage {
+            max-width: 100%; /* Ensure image fits container */
+            height: auto; /* Maintain aspect ratio */
+            border-radius: 0.5rem; /* Tailwind rounded-md */
+            border: 1px solid #d1d5db; /* Tailwind gray-300 */
+            display: none; /* Hide initially */
+        }
+         #loadingMessage {
+            color: #1d4ed8; /* Tailwind blue-700 */
+            font-weight: 600;
+            display: none; /* Hide initially */
+         }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="drawing-area">
+            <canvas id="drawingCanvas"></canvas>
+        </div>
+
+        <div class="controls">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Drawing Tools</h2>
+
+            <div class="tool-group">
+                <label for="colorPicker">Stroke Color:</label>
+                <input type="color" id="colorPicker" value="#000000">
+            </div>
+
+            <div class="tool-group">
+                <label for="lineWidthSlider">Line Width:</label>
+                <input type="range" id="lineWidthSlider" min="1" max="20" value="5">
+                <span id="lineWidthValue" class="text-sm text-gray-600">5</span>
+            </div>
+
+            <div class="tool-group">
+                <button id="clearButton">Clear Board</button>
+            </div>
+
+            <div class="tool-group">
+                 <button id="generateButton">Generate Image (AI)</button>
+            </div>
+        </div>
+
+        <div class="output-area">
+             <h2 class="text-xl font-bold text-gray-800 mb-4">Generated Image</h2>
+             <img id="outputImage" alt="Generated Image">
+             <p id="loadingMessage">Generating image...</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const lineWidthSlider = document.getElementById('lineWidthSlider');
+        const lineWidthValueSpan = document.getElementById('lineWidthValue');
+        const clearButton = document.getElementById('clearButton');
+        const generateButton = document.getElementById('generateButton');
+        const outputImage = document.getElementById('outputImage');
+        const loadingMessage = document.getElementById('loadingMessage');
+
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+
+        // Set initial canvas size and drawing properties
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            // Set a default height or calculate based on aspect ratio if needed
+            // For now, let's set a fixed height for simplicity, or make it responsive
+            // Let's make it responsive based on a ratio
+            canvas.height = container.clientWidth * 0.75; // Example: 4:3 aspect ratio
+
+             // Redraw content if needed after resize - for a simple drawing app, clearing is fine
+             // If you had complex drawings to preserve, you'd need to save/restore state
+             ctx.lineCap = 'round';
+             ctx.lineJoin = 'round';
+             ctx.lineWidth = lineWidthSlider.value;
+             ctx.strokeStyle = colorPicker.value;
+             ctx.fillStyle = '#ffffff'; // Set background to white
+             ctx.fillRect(0, 0, canvas.width, canvas.height); // Fill with white
+        }
+
+        // Initial resize and resize on window change
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Call once on load
+
+        // Update line width display
+        lineWidthSlider.addEventListener('input', (e) => {
+            lineWidthValueSpan.textContent = e.target.value;
+            ctx.lineWidth = e.target.value;
+        });
+
+        // Update stroke color
+        colorPicker.addEventListener('input', (e) => {
+            ctx.strokeStyle = e.target.value;
+        });
+
+        // Start drawing
+        function startDrawing(e) {
+            isDrawing = true;
+            [lastX, lastY] = getCoordinates(e);
+        }
+
+        // Draw line
+        function draw(e) {
+            if (!isDrawing) return;
+            const [x, y] = getCoordinates(e);
+
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+
+            [lastX, lastY] = [x, y];
+        }
+
+        // Stop drawing
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        // Get mouse or touch coordinates relative to the canvas
+        function getCoordinates(e) {
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+
+            if (e.touches) { // Touch event
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else { // Mouse event
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+
+            return [
+                clientX - rect.left,
+                clientY - rect.top
+            ];
+        }
+
+        // Mouse events
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing); // Stop drawing if mouse leaves canvas
+
+        // Touch events
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent scrolling
+            startDrawing(e);
+        }, { passive: false }); // Use passive: false to allow preventDefault
+        canvas.addEventListener('touchmove', (e) => {
+             e.preventDefault(); // Prevent scrolling
+             draw(e);
+        }, { passive: false });
+        canvas.addEventListener('touchend', stopDrawing);
+        canvas.addEventListener('touchcancel', stopDrawing); // Handle touch interruption
+
+        // Clear canvas
+        clearButton.addEventListener('click', () => {
+            ctx.fillStyle = '#ffffff'; // Set background to white
+            ctx.fillRect(0, 0, canvas.width, canvas.height); // Fill with white
+             outputImage.style.display = 'none'; // Hide previous output
+             outputImage.src = ''; // Clear previous image
+        });
+
+        // Generate image using AI
+        generateButton.addEventListener('click', async () => {
+            // Get image data from canvas
+            const imageDataUrl = canvas.toDataURL('image/png'); // Get base64 PNG data
+
+            // --- Hugging Face AI Model Integration ---
+            // Replace with your actual Hugging Face model API endpoint
+            const HUGGING_FACE_API_URL = "YOUR_HUGGING_FACE_API_URL"; // e.g., "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2-1-base"
+
+            // You might need an API key for authentication
+            const HUGGING_FACE_API_TOKEN = "YOUR_HUGGING_FACE_API_TOKEN"; // Get this from your Hugging Face settings
+
+            if (HUGGING_FACE_API_URL === "YOUR_HUGGING_FACE_API_URL" || HUGGING_FACE_API_TOKEN === "YOUR_HUGGING_FACE_API_TOKEN") {
+                 alert("Please replace 'YOUR_HUGGING_FACE_API_URL' and 'YOUR_HUGGING_FACE_API_TOKEN' with your actual API details.");
+                 return;
+            }
+
+            // Convert base64 data URL to a Blob
+            const base64Response = await fetch(imageDataUrl);
+            const blob = await base64Response.blob();
+
+            loadingMessage.style.display = 'block'; // Show loading message
+            outputImage.style.display = 'none'; // Hide previous output
+            outputImage.src = ''; // Clear previous image
+
+
+            try {
+                const response = await fetch(
+                    HUGGING_FACE_API_URL,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${HUGGING_FACE_API_TOKEN}`,
+                        },
+                        method: "POST",
+                        body: blob, // Send the image blob as the body
+                    }
+                );
+
+                if (!response.ok) {
+                    const errorBody = await response.json();
+                    throw new Error(`API Error: ${response.status} ${response.statusText} - ${JSON.stringify(errorBody)}`);
+                }
+
+                // The response is expected to be an image blob
+                const resultBlob = await response.blob();
+                const resultImageUrl = URL.createObjectURL(resultBlob); // Create a temporary URL for the blob
+
+                outputImage.src = resultImageUrl;
+                outputImage.style.display = 'block'; // Show the generated image
+
+            } catch (error) {
+                console.error("Error generating image:", error);
+                // Display an error message to the user
+                loadingMessage.textContent = `Error: ${error.message}`;
+                loadingMessage.style.color = '#dc2626'; // Tailwind red-600
+            } finally {
+                 loadingMessage.style.display = 'none'; // Hide loading message
+                 loadingMessage.textContent = 'Generating image...'; // Reset message text
+                 loadingMessage.style.color = '#1d4ed8'; // Reset message color
+            }
+        });
+
+        // Simple alert replacement
+        function alert(message) {
+            const messageBox = document.createElement('div');
+            messageBox.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background-color: #fff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+                z-index: 1000;
+                text-align: center;
+                font-family: 'Inter', sans-serif;
+                color: #333;
+            `;
+            messageBox.textContent = message;
+
+            const closeButton = document.createElement('button');
+            closeButton.textContent = 'OK';
+            closeButton.style.cssText = `
+                margin-top: 15px;
+                padding: 8px 15px;
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            `;
+            closeButton.onclick = () => messageBox.remove();
+            messageBox.appendChild(closeButton);
+
+            document.body.appendChild(messageBox);
+        }
+
+
+    </script>
+
+</body>
+</html>
+
