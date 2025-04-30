@@ -37,24 +37,19 @@ class DrawingState:
 drawing_state = DrawingState()
 
 # --- Helper Functions ---
-def throttle(wait_time):
-    """Decorator for rate limiting."""
-    def decorator(func):
-        async def throttled(*args, **kwargs):
-            nonlocal drawing_state
-            now = time.time()
-            if now - drawing_state.last_call_time > wait_time:
-                drawing_state.last_call_time = now
-                try:
-                    return await func(*args, **kwargs) # Await the async function
-                except Exception as e:
-                    print(f"Error during throttled function: {e}")
-                    traceback.print_exc()
-                    return None
-            else:
-                return None # Indicate throttling
-        return throttled
-    return decorator
+class Throttler:
+    def __init__(self, wait_time):
+        self.wait_time = wait_time
+        self.last_call_time = 0
+
+    def throttle(self):
+        now = time.time()
+        if now - self.last_call_time > self.wait_time:
+            self.last_call_time = now
+            return True
+        return False
+
+throttler = Throttler(THROTTLE_TIME)
 
 def numpy_to_pil(numpy_image):
     """Converts a NumPy array to a PIL Image."""
@@ -193,9 +188,11 @@ async def generate_image_from_drawing(input_pil_image, prompt_override=""):
 # --- Gradio Interface ---
 print("Setting up Enhanced Gradio interface...")
 
-@throttle(wait_time=THROTTLE_TIME)
 async def process_drawing(canvas_data, current_prompt):
-    """Processes the drawing and generates the image."""
+    """Processes the drawing and generates the image, applying throttling."""
+    if not throttler.throttle():
+        return None, "Throttled: Please wait a moment."
+
     if canvas_data is None:
         return None, "No drawing input."
 
