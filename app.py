@@ -229,7 +229,6 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
         with gr.Column(scale=1):
             canvas = gr.Image(
                 label="Draw Here",
-                sources="canvas",  # Explicitly set the source to 'canvas'
                 type="numpy",
                 image_mode="RGB",
                 height=512,
