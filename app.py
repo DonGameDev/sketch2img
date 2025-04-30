@@ -411,6 +411,6 @@ if __name__ == "__main__":
     demo.queue()
     # demo.launch() starts the web server
     # Set debug=True during development for more detailed error messages
-    demo.launch()
+    demo.launch(share=True)
     print("Gradio App Launched.")
     
