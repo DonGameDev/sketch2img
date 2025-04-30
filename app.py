@@ -312,7 +312,6 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                 height=512,
                 width=512,
                 interactive=True, # Allow drawing
-                brush_radius=5 # Add a default brush size
             )
             with gr.Row():
                 # Button to clear the canvas
