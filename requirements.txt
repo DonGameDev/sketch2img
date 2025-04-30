@@ -1,4 +1,4 @@
-gradio>=4.20,<5.0  # Use a recent, stable version range
+gradio>=4.44.1
 requests
 Pillow
 numpy
