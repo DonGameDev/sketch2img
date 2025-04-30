@@ -353,7 +353,7 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
     # Trigger image generation when the canvas is edited (drawn on) or text prompt changes
     # Use gr.State to potentially hold last successful outputs if needed for throttling "return previous"
     # but let's keep it simple and just return None on throttle for this version.
-    canvas.edit(
+    canvas.change(
         fn=process_drawing, # The async function to call
         inputs=[canvas, prompt_input],
         outputs=[output_image, status_display],
@@ -394,7 +394,7 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
             return f"{shape_text}\n{color_text}"
         return "Error analyzing drawing."
 
-    canvas.edit(
+    canvas.change(
         fn=update_analysis_display,
         inputs=[canvas],
         outputs=[prompt_analysis_display],
