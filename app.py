@@ -233,9 +233,10 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                 image_mode="RGB",
                 height=512,
                 width=512,
-                brush_radius=8, # Slightly larger default
-                interactive=True
-            )
+                interactive=True,
+                tool_kwargs={"brush_radius": 8}
+             
+                        )
             with gr.Row():
                 clear_button = gr.Button("Clear Canvas")
                 # Basic "undo" by just clearing - more sophisticated undo would require state tracking
