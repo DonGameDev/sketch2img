@@ -3,218 +3,228 @@ import gradio as gr
 import requests
 import base64
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import os
 import cv2  # Import OpenCV
-import time # Import time at the top level
-import traceback # For detailed error logging
+import time
+import traceback
+import asyncio # For asynchronous tasks
 
-print("Starting App...")
+print("Starting Enhanced App...")
 
 # --- Configuration ---
-# Ensure HF_TOKEN is set as a Secret in your Space settings
 HUGGINGFACE_API_KEY = os.environ.get("HF_TOKEN")
 HF_MODEL = "stabilityai/stable-diffusion-xl-turbo" # Fast text-to-image model
-REQUEST_TIMEOUT = 30 # Seconds to wait for API response
-THROTTLE_TIME = 0.75 # Seconds between allowed generation calls (adjust as needed)
+REQUEST_TIMEOUT = 30 # Seconds
+THROTTLE_TIME = 0.5 # Reduced slightly with potential async
+MIN_CONTOUR_AREA = 50 # Adjusted min contour area
+SHAPE_APPROX_EPSILON = 0.01 # Tuned shape approximation
+CIRCLE_CIRCULARITY_THRESHOLD = (0.7, 1.3) # Wider range for circles
 
 if not HUGGINGFACE_API_KEY:
-    print("ERROR: Hugging Face API Key (HF_TOKEN) not found. Please set it in Space secrets.")
-    # You might want to raise an exception or handle this more gracefully depending on deployment
-    # raise ValueError("Hugging Face API Key (HF_TOKEN) not found.")
+    print("ERROR: Hugging Face API Key (HF_TOKEN) not found.")
 
 print(f"Using Model: {HF_MODEL}")
 print(f"Throttle Time: {THROTTLE_TIME}s")
 
-# --- Helper Function: Throttling ---
+# --- State Management ---
+class DrawingState:
+    def __init__(self):
+        self.last_call_time = 0
+        self.drawn_image = None # To store the PIL image of the drawing
+
+drawing_state = DrawingState()
+
+# --- Helper Functions ---
 def throttle(wait_time):
-    """Decorator that prevents a function from being called more than once every wait_time seconds."""
-    last_call_time = 0
+    """Decorator for rate limiting."""
     def decorator(func):
-        def throttled(*args, **kwargs):
-            nonlocal last_call_time
+        async def throttled(*args, **kwargs):
+            nonlocal drawing_state
             now = time.time()
-            if now - last_call_time > wait_time:
-                last_call_time = now
+            if now - drawing_state.last_call_time > wait_time:
+                drawing_state.last_call_time = now
                 try:
-                    return func(*args, **kwargs)
+                    return await func(*args, **kwargs) # Await the async function
                 except Exception as e:
-                    print(f"Error during throttled function execution: {e}")
-                    traceback.print_exc() # Log detailed error
-                    # Decide what to return on error within the throttled function
-                    # Returning None might stop UI updates if the output expects an image
+                    print(f"Error during throttled function: {e}")
+                    traceback.print_exc()
                     return None
             else:
-                # print("Throttled!") # Uncomment for debugging
-                # Return None to prevent updating the output component when throttled
-                return None
+                return None # Indicate throttling
         return throttled
     return decorator
 
-# --- Image Generation Logic ---
-def generate_image_from_drawing(input_np_image):
-    """
-    Generates an image based on a drawing using SDXL-Turbo.
-    Uses basic shape detection on the input drawing to create a text prompt.
-    Args:
-        input_np_image (np.array | None): NumPy array (H, W, C) from Gradio canvas.
-                                           Can be None initially or if canvas is cleared.
-    Returns:
-        PIL.Image | None: The generated image or None if an error occurs or input is invalid.
-    """
-    if input_np_image is None:
+def numpy_to_pil(numpy_image):
+    """Converts a NumPy array to a PIL Image."""
+    if numpy_image is not None:
+        return Image.fromarray(numpy_image.astype(np.uint8))
+    return None
+
+def pil_to_numpy(pil_image):
+    """Converts a PIL Image to a NumPy array."""
+    if pil_image is not None:
+        return np.array(pil_image)
+    return None
+
+def analyze_drawing(pil_image):
+    """Analyzes the PIL drawing for shapes and colors."""
+    if pil_image is None:
+        return [], []
+
+    numpy_image = np.array(pil_image.convert("RGB"))
+    gray = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2GRAY)
+    _, thresh = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    shapes = []
+    for contour in contours:
+        if cv2.contourArea(contour) > MIN_CONTOUR_AREA:
+            perimeter = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, SHAPE_APPROX_EPSILON * perimeter, True)
+            num_vertices = len(approx)
+            shape_name = None
+
+            if num_vertices == 3:
+                shape_name = "triangle"
+            elif num_vertices == 4:
+                x, y, w, h = cv2.boundingRect(approx)
+                aspect_ratio = float(w) / h
+                if 0.95 <= aspect_ratio <= 1.05:
+                    shape_name = "square"
+                else:
+                    shape_name = "rectangle"
+            elif num_vertices == 5:
+                shape_name = "pentagon"
+            elif num_vertices > 5:
+                area = cv2.contourArea(contour)
+                circularity = 4 * np.pi * (area / (perimeter * perimeter)) if perimeter > 0 else 0
+                if CIRCLE_CIRCULARITY_THRESHOLD[0] < circularity < CIRCLE_CIRCULARITY_THRESHOLD[1]:
+                    shape_name = "circle"
+                else:
+                    shape_name = "polygon"
+            elif num_vertices < 3 and perimeter > 20: # Basic line/curve detection
+                shape_name = "line or curve"
+
+            if shape_name and shape_name not in shapes:
+                shapes.append(shape_name)
+
+    # Basic color analysis (dominant colors)
+    colors = pil_image.getcolors(maxcolors=5) # Get up to 5 dominant colors
+    dominant_colors = []
+    if colors:
+        for count, color in colors:
+            # Exclude near-white or near-black as "dominant" for simplicity
+            if not (200 < color[0] < 256 and 200 < color[1] < 256 and 200 < color[2] < 256) and \
+               not (color[0] < 50 and color[1] < 50 and color[2] < 50):
+                dominant_colors.append(f"#{''.join(f'{c:02x}' for c in color[:3])}") # Hex code
+
+    return shapes, dominant_colors
+
+# --- Image Generation Logic (Asynchronous) ---
+async def generate_image_from_drawing(input_pil_image, prompt_override=""):
+    """Generates an image based on a PIL drawing and optional text prompt."""
+    if input_pil_image is None:
         print("Input image is None, skipping generation.")
-        return None # Return None, Gradio will handle it for the output Image
+        return None
 
-    # Check if the canvas is effectively empty (e.g., all black or all white)
-    # Check for non-zero elements (drawing) or elements not equal to 255 (if background is white)
-    if not np.any(input_np_image) or np.all(input_np_image == 255):
-         print("Input image is empty, skipping generation.")
-         return None
+    if not np.any(pil_to_numpy(input_pil_image)) or np.all(pil_to_numpy(input_pil_image) == 255):
+        print("Input image is empty, skipping generation.")
+        return None
 
-    # --- Dynamic Prompt Engineering (Basic Example) ---
     prompt = "cinematic photo, high detail illustration of " # Base prompt
+    detected_shapes, dominant_colors = analyze_drawing(input_pil_image)
+
+    if detected_shapes:
+        prompt += ", ".join(detected_shapes)
+    else:
+        prompt += "an abstract sketch"
+
+    if dominant_colors:
+        prompt += f", with colors: {', '.join(dominant_colors)}"
+
+    if prompt_override:
+        prompt = f"{prompt_override}, based on a drawing of {', '.join(detected_shapes) or 'an abstract form'}"
+
+    prompt += ", trending on artstation, masterpiece, high resolution"
+    print(f"Generated Prompt: {prompt}")
+
+    if not HUGGINGFACE_API_KEY:
+        print("API Key missing, cannot make request.")
+        return "Error: API Key not configured."
+
+    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
+    payload = {
+        "inputs": prompt,
+        "options": {"wait_for_model": True}
+    }
+    api_url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
 
     try:
-        # 1. Basic Shape Detection (Using the input NumPy array directly)
-        # Ensure the input array has 3 dimensions (H, W, C) and is RGB
-        if input_np_image.ndim != 3 or input_np_image.shape[2] != 3:
-             print(f"Warning: Unexpected image shape: {input_np_image.shape}. Skipping shape detection.")
-             gray = None # Cannot perform shape detection
-        else:
-            # Convert RGB to Grayscale for thresholding
-            gray = cv2.cvtColor(input_np_image, cv2.COLOR_RGB2GRAY)
-
-        shapes = []
-        if gray is not None:
-            # Apply thresholding. Assumes dark lines on white background.
-            # Use THRESH_BINARY_INV: Pixels below threshold become max value (255), others 0.
-            # Adjust threshold value (e.g., 200-240) depending on background color and line intensity.
-            # If lines are light on dark bg, use THRESH_BINARY and a lower threshold (e.g., 30-50).
-            _, thresh = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY_INV)
-
-            # Find contours
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-            # Filter contours by area to ignore small specks
-            min_contour_area = 100 # Adjust as needed based on canvas size
-            large_contours = [c for c in contours if cv2.contourArea(c) > min_contour_area]
-
-            for contour in large_contours:
-                # Approximate the contour shape
-                perimeter = cv2.arcLength(contour, True)
-                approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True) # Adjust epsilon factor if needed
-                num_vertices = len(approx)
-                shape_name = None
-
-                # Basic shape classification
-                if num_vertices == 3:
-                    shape_name = "triangle"
-                elif num_vertices == 4:
-                    # Could add logic here to differentiate square/rectangle based on aspect ratio/angles
-                    shape_name = "quadrilateral"
-                elif num_vertices == 5:
-                     shape_name = "pentagon"
-                elif num_vertices > 5:
-                    # Basic check for circle-like shapes using circularity
-                    area = cv2.contourArea(contour)
-                    if perimeter > 0:
-                        circularity = 4 * np.pi * (area / (perimeter * perimeter))
-                        if 0.75 < circularity < 1.25: # Adjust circularity threshold range
-                             shape_name = "circle" # Simplified name
-                        else:
-                             shape_name = "polygon" # Generic for other complex shapes
-                else:
-                    shape_name = "line or curve" # If approximation results in < 3 vertices
-
-                # Only add unique shape names found
-                if shape_name and shape_name not in shapes:
-                    shapes.append(shape_name)
-
-        if shapes:
-            prompt += ", ".join(shapes)
-        else:
-            # Fallback if no shapes detected or analysis skipped
-            prompt += "an abstract sketch"
-
-        # Add style modifiers
-        prompt += ", trending on artstation, masterpiece, high resolution"
-
-        print(f"Generated Prompt: {prompt}") # Log the prompt being sent
-
-        # --- Hugging Face API Call ---
-        if not HUGGINGFACE_API_KEY:
-            print("API Key missing, cannot make request.")
-            # Maybe return a placeholder indicating the API key issue
-            # Or rely on the initial check. For robustness, check again.
-            return None
-
-        headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-        payload = {
-            "inputs": prompt,
-            "options": {
-                "wait_for_model": True, # Important for potentially cold starts
-                # SDXL-Turbo often works well with minimal or no negative prompt/guidance
-                # "negative_prompt": "blurry, low quality, text, watermark",
-                # "guidance_scale": 0.0 # Guidance scale for Turbo models is often 0
-            }
-        }
-        api_url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
-
         print(f"Sending request to {api_url}...")
-        response = requests.post(api_url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
-
+        response = await asyncio.to_thread(requests.post, api_url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
         print(f"API Response Status Code: {response.status_code}")
-        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
 
-        # --- Process Response ---
-        if response.headers.get("Content-Type") == "image/jpeg" or response.headers.get("Content-Type") == "image/png":
-            print("Image received successfully.")
+        if response.headers.get("Content-Type") in ["image/jpeg", "image/png"]:
             generated_image_bytes = response.content
-            # Convert bytes to PIL Image
             generated_image = Image.open(BytesIO(generated_image_bytes))
-            return generated_image # Return PIL Image, Gradio handles it
+            return generated_image
         else:
-            # Handle cases where the API might return JSON with error messages
-            print(f"Unexpected content type received: {response.headers.get('Content-Type')}")
-            print(f"Response content: {response.text}") # Log the response text
-            return None
+            print(f"Unexpected content type: {response.headers.get('Content-Type')}, Response: {response.text}")
+            return "Error: Unexpected API response."
 
     except requests.exceptions.Timeout:
-        print(f"API Error: Request timed out after {REQUEST_TIMEOUT} seconds.")
-        return None
+        print(f"API Timeout after {REQUEST_TIMEOUT} seconds.")
+        return "Error: API request timed out."
     except requests.exceptions.RequestException as e:
-        print(f"API Error: {e}")
-        # Log more details if available (e.g., response content for 4xx/5xx errors)
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"API Response Content: {e.response.text}")
-        return None
+        print(f"API Request Error: {e}, Response: {getattr(e.response, 'text', '')}")
+        return f"Error: API request failed ({e})."
     except cv2.error as e:
-        print(f"OpenCV Error during shape detection: {e}")
+        print(f"OpenCV Error: {e}")
         traceback.print_exc()
-        # Proceed without shape info or return None
-        # If continuing, ensure 'prompt' has a fallback value
-        # For simplicity here, returning None on OpenCV error
-        return None
+        return "Error: Drawing analysis failed."
     except Exception as e:
-        print(f"An unexpected error occurred in generate_image_from_drawing: {e}")
-        traceback.print_exc() # Print full traceback for debugging
-        return None # Graceful failure
+        print(f"Unexpected Error: {e}")
+        traceback.print_exc()
+        return "Error: Image generation failed."
 
 # --- Gradio Interface ---
-print("Setting up Gradio interface...")
+print("Setting up Enhanced Gradio interface...")
 
-# Apply throttling to the image generation function
-throttled_generate = throttle(wait_time=THROTTLE_TIME)(generate_image_from_drawing)
+@throttle(wait_time=THROTTLE_TIME)
+async def process_drawing(canvas_data, current_prompt):
+    """Processes the drawing and generates the image."""
+    if canvas_data is None:
+        return None, "No drawing input."
 
-with gr.Blocks(css="footer {visibility: hidden}") as demo: # Hide default Gradio footer
+    pil_image = numpy_to_pil(canvas_data)
+    drawing_state.drawn_image = pil_image # Store the current drawing
+
+    if pil_image:
+        generated_image = await generate_image_from_drawing(pil_image, current_prompt)
+        return generated_image, "Generation complete."
+    else:
+        return None, "Invalid drawing input."
+
+def clear_canvas():
+    """Clears the drawing canvas."""
+    return None
+
+def undo_drawing(previous_images):
+    """Undoes the last drawing action (basic implementation)."""
+    if previous_images:
+        return previous_images[-1] # Returns the last saved state
+    return None
+
+# --- Gradio Blocks ---
+with gr.Blocks(css="footer {visibility: hidden}") as demo:
     gr.Markdown(
         """
-        # 🎨 Real-time AI Drawing Canvas
-        Draw something below! The app tries to detect basic shapes to create a prompt
-        for the SDXL-Turbo model, generating an image in near real-time.
-        *(Generation might take a few seconds, especially on first use)*
+        # 🎨 Enhanced Real-time AI Drawing Canvas
+        Draw, add text, and watch AI generate images based on your creations!
+        *(Generation might take a few seconds)*
         """
     )
 
@@ -222,42 +232,56 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo: # Hide default Gradio
         with gr.Column(scale=1):
             canvas = gr.Image(
                 label="Draw Here",
-                type="numpy",           # Input type is NumPy array
-                tool="sketch",          # Use the sketch tool
-                image_mode="RGB",       # Ensure input is RGB
-                height=512,             # Set canvas height
-                width=512,              # Set canvas width
-                brush_radius=4          # Adjust brush size
-                # interactive=True # Default is True
+                type="numpy",
+                image_mode="RGB",
+                height=512,
+                width=512,
+                brush_radius=8, # Slightly larger default
+                interactive=True
             )
-            gr.Markdown("*(Drawing triggers generation automatically after a short pause)*")
+            with gr.Row():
+                clear_button = gr.Button("Clear Canvas")
+                # Basic "undo" by just clearing - more sophisticated undo would require state tracking
+                undo_button = gr.Button("Undo (Clear)")
+            prompt_input = gr.Textbox(label="Optional Text Prompt", placeholder="Add extra details to influence the image")
+            prompt_display = gr.Textbox(label="Detected Shapes & Colors", interactive=False)
+
+            def update_prompt_display(pil_image):
+                if pil_image:
+                    shapes, colors = analyze_drawing(pil_image)
+                    prompt_info = f"Detected Shapes: {', '.join(shapes) or 'None'}\nDetected Colors: {', '.join(colors) or 'None'}"
+                    return prompt_info
+                return "No drawing to analyze."
+
+            canvas.edit(fn=lambda x: update_prompt_display(numpy_to_pil(x)), inputs=canvas, outputs=prompt_display, queue=False)
 
         with gr.Column(scale=1):
             output_image = gr.Image(
                 label="Generated Image",
                 height=512,
                 width=512,
-                interactive=False # Output is not interactive
+                interactive=False
             )
-            # Placeholder or status display can be added here if needed
+            status_display = gr.Textbox(label="Status", interactive=False)
 
-    # --- Event Listener ---
-    # Trigger generation when the canvas drawing changes (on mouse release typically)
-    canvas.change(
-        fn=throttled_generate, # Use the throttled function
-        inputs=canvas,
-        outputs=output_image,
-        # queue=True # Enable queue for smoother handling if generation is slow or multiple users
-                     # Might increase perceived latency slightly initially. Test what works best.
+    # --- Event Listeners ---
+    canvas.edit(
+        fn=process_drawing,
+        inputs=[canvas, prompt_input],
+        outputs=[output_image, status_display],
+        queue=True
     )
+    clear_button.click(inputs=[], outputs=canvas, fn=clear_canvas)
+    undo_button.click(inputs=[], outputs=canvas, fn=clear_canvas) # Basic undo as clear
 
     gr.Markdown(f"--- \n*Model: `{HF_MODEL}` | Throttle: `{THROTTLE_TIME}s`*")
 
-print("Gradio Blocks defined.")
+print("Enhanced Gradio Blocks defined.")
 
 # --- Launch the App ---
 if __name__ == "__main__":
-    print("Launching Gradio App...")
-    demo.queue() # Enable the queue for better request handling (recommended)
-    demo.launch()  # Share=True is not needed when deploying on HF Spaces
-    print("Gradio App Launched.")
+    print("Launching Enhanced Gradio App...")
+    demo.queue()
+    demo.launch()
+    print("Enhanced Gradio App Launched.")
+    
