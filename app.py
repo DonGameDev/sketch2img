@@ -235,10 +235,7 @@ with gr.Blocks(css="footer {visibility: hidden}") as demo:
                 height=512,
                 width=512,
                 interactive=True
-                # We'll omit brush_radius and tool_kwargs for now
-             
-                        )
-             
+                # We'll omit brush_radius and tool_kwargs for now             
                         )
             with gr.Row():
                 clear_button = gr.Button("Clear Canvas")
