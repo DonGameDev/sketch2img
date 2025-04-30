@@ -1,5 +1,5 @@
-gradio==4.44.1
+gradio>=4.0,<5.0 # Or a more specific version like gradio==4.x.x
 requests
 Pillow
 numpy
-opencv-python-headless
+opencv-python
