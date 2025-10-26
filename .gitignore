@@ -1,0 +1,6 @@
+# Gradio files
+.gradio/
+gradio.log
+
+# Jules scratch directory
+jules-scratch/
