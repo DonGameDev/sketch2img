@@ -1,0 +1,10 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Gradio files
+.gradio/
+gradio.log
+
+# Verification directory
+/home/jules/verification/
