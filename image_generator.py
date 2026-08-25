@@ -49,7 +49,24 @@ def numpy_to_pil(numpy_image_dict):
     if numpy_image_dict is None:
         return None
     try:
-        numpy_array = numpy_image_dict.get('image') if isinstance(numpy_image_dict, dict) else numpy_image_dict
+        if isinstance(numpy_image_dict, Image.Image):
+            return numpy_image_dict.convert("RGB")
+
+        if isinstance(numpy_image_dict, dict):
+            numpy_array = None
+            for key in ("composite", "image", "background"):
+                if numpy_image_dict.get(key) is not None:
+                    numpy_array = numpy_image_dict.get(key)
+                    break
+        else:
+            numpy_array = numpy_image_dict
+
+        if isinstance(numpy_array, Image.Image):
+            return numpy_array.convert("RGB")
+
+        if numpy_array is None:
+            return None
+
         if len(numpy_array.shape) == 3 and numpy_array.shape[2] in [3, 4]:
             return Image.fromarray(numpy_array[:, :, :3].astype(np.uint8), 'RGB')
         elif len(numpy_array.shape) == 2:
