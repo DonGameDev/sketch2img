@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  backend:
+    build: .
+    command: uvicorn backend.server:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/src
+  redis:
+    image: redis:6-alpine
+    ports:
+      - "6379:6379"
