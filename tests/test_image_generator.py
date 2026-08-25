@@ -48,6 +48,23 @@ def test_pil_numpy_conversion():
     assert isinstance(converted_pil, Image.Image)
     assert converted_pil.size == (10, 10)
 
+def test_numpy_to_pil_with_image_editor_dict():
+    """Tests conversion when Gradio ImageEditor-style dict data is provided."""
+    numpy_array = np.zeros((12, 14, 4), dtype=np.uint8)
+    numpy_array[:, :, 3] = 255
+    converted_pil = numpy_to_pil({"composite": numpy_array})
+    assert isinstance(converted_pil, Image.Image)
+    assert converted_pil.mode == "RGB"
+    assert converted_pil.size == (14, 12)
+
+def test_numpy_to_pil_accepts_pil_input():
+    """Tests conversion when input is already a PIL image."""
+    pil_image = Image.new("RGBA", (8, 9), color=(10, 20, 30, 255))
+    converted_pil = numpy_to_pil(pil_image)
+    assert isinstance(converted_pil, Image.Image)
+    assert converted_pil.mode == "RGB"
+    assert converted_pil.size == (8, 9)
+
 def test_analyze_drawing_empty_image():
     """Tests that analyzing an empty image returns no shapes or colors."""
     # Create a completely white (empty) image

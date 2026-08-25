@@ -8,6 +8,7 @@ using the Gradio library. The backend logic is handled by image_generator.py.
 
 import gradio as gr
 import logging
+from PIL import Image
 
 import config
 from image_generator import generate_image, numpy_to_pil, inpaint_image
@@ -21,17 +22,34 @@ def create_gradio_interface():
     with gr.Blocks(theme=gr.themes.Soft()) as demo:
         gr.Markdown("# Sketch-to-Image Generator")
         gr.Markdown("Create new images from sketches, uploads, and text prompts.")
+        gr.Markdown(
+            "Use the sketch canvas tools to draw with a brush, erase, and undo/redo. "
+            "Use the controls below to customize brush size, brush color, and canvas size."
+        )
 
         with gr.Tabs():
             with gr.TabItem("Create"):
                 with gr.Row():
-                    canvas = gr.Image(
-                        label="Draw Here or Upload an Image",
+                    brush_size = gr.Slider(minimum=1, maximum=80, step=1, value=8, label="Brush Size")
+                    brush_color = gr.ColorPicker(value="#000000", label="Brush Color")
+                    canvas_size = gr.Dropdown(
+                        choices=["512x512", "768x768", "1024x1024"],
+                        value="512x512",
+                        label="Canvas Size",
+                    )
+                    transparent_background = gr.Checkbox(value=False, label="Transparent Background")
+                    apply_canvas_settings = gr.Button("Apply Canvas Settings")
+                with gr.Row():
+                    canvas = gr.ImageEditor(
+                        label="Sketch Canvas",
                         type="numpy",
-                        image_mode="RGB",
+                        image_mode="RGBA",
                         height=512,
                         width=512,
-                        interactive=True,
+                        brush=gr.Brush(default_size=8, colors=["#000000"], color_mode="fixed"),
+                        eraser=gr.Eraser(default_size=20),
+                        layers=False,
+                        sources=("upload", "clipboard"),
                     )
                     output_image = gr.Image(
                         label="Generated Image",
@@ -74,6 +92,20 @@ def create_gradio_interface():
         # --- State Management ---
         history_state = gr.State([])
 
+        def update_canvas_settings(size_preset, size, color, is_transparent):
+            width, height = map(int, size_preset.split("x"))
+            background = None if is_transparent else Image.new("RGBA", (width, height), (255, 255, 255, 255))
+            return gr.ImageEditor(
+                value=background,
+                image_mode="RGBA",
+                height=height,
+                width=width,
+                brush=gr.Brush(default_size=int(size), colors=[color], color_mode="fixed"),
+                eraser=gr.Eraser(default_size=max(8, int(size * 1.5))),
+                layers=False,
+                sources=("upload", "clipboard"),
+            )
+
         # --- Event Handling ---
         async def on_generate(image_dict, prompt, negative_prompt, guidance_scale, seed, current_history):
             """Wrapper to handle the image generation process and update history."""
@@ -100,6 +132,11 @@ def create_gradio_interface():
             fn=on_generate,
             inputs=[canvas, prompt_input, negative_prompt_input, guidance_scale_slider, seed_input, history_state],
             outputs=[output_image, status_display, history_gallery]
+        )
+        apply_canvas_settings.click(
+            fn=update_canvas_settings,
+            inputs=[canvas_size, brush_size, brush_color, transparent_background],
+            outputs=canvas,
         )
 
         inpainting_button.click(
